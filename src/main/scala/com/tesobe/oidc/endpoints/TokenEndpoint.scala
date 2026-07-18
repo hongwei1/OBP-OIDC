@@ -128,6 +128,7 @@ class TokenEndpoint(
     val resolvedClientId = clientIdFromBasic.orElse(clientIdFromForm)
     val credentialSource = if (clientIdFromBasic.isDefined) "Basic auth header" else if (clientIdFromForm.isDefined) "form data" else "NONE"
     val refreshToken = formData.get("refresh_token")
+    val codeVerifier = formData.get("code_verifier") // PKCE (RFC 7636)
 
     println(s"DEBUG: Grant type extracted: ${grantType}")
     logger.info(s"Grant type: ${grantType.getOrElse("MISSING")}")
@@ -180,7 +181,8 @@ class TokenEndpoint(
                       processAuthorizationCodeGrant(
                         authCode,
                         redirectUriValue,
-                        clientIdValue
+                        clientIdValue,
+                        codeVerifier
                       )
                     case Left(error) =>
                       logger.warn(
@@ -197,7 +199,8 @@ class TokenEndpoint(
                 processAuthorizationCodeGrant(
                   authCode,
                   redirectUriValue,
-                  clientIdValue
+                  clientIdValue,
+                  codeVerifier
                 )
             }
           case _ =>
@@ -293,10 +296,19 @@ class TokenEndpoint(
     }
   }
 
+  // PKCE (RFC 7636 §4.6): BASE64URL-ENCODE(SHA256(ASCII(code_verifier))), no padding.
+  private def computeS256Challenge(codeVerifier: String): String = {
+    val digest = MessageDigest
+      .getInstance("SHA-256")
+      .digest(codeVerifier.getBytes(java.nio.charset.StandardCharsets.US_ASCII))
+    java.util.Base64.getUrlEncoder.withoutPadding.encodeToString(digest)
+  }
+
   private def processAuthorizationCodeGrant(
       code: String,
       redirectUri: String,
-      clientId: String
+      clientId: String,
+      codeVerifier: Option[String] = None
   ): IO[Response[IO]] = {
 
     logger.info(s"Validating authorization code for client: $clientId")
@@ -315,6 +327,26 @@ class TokenEndpoint(
         logger.info(
           s"DEBUG: AuthCode details - scope: ${authCode.scope}, nonce: ${authCode.nonce}"
         )
+        // PKCE (RFC 7636 §4.6): if the authorization request carried a code_challenge, the
+        // matching code_verifier is mandatory here and must hash (S256) to that challenge.
+        // If no challenge was captured, no verifier is required (non-PKCE clients unaffected).
+        val pkceResult: Either[OidcError, Unit] = authCode.code_challenge match {
+          case None => Right(())
+          case Some(challenge) =>
+            codeVerifier match {
+              case None =>
+                Left(OidcError("invalid_grant", Some("code_verifier is required for this authorization code")))
+              case Some(verifier) if computeS256Challenge(verifier) == challenge =>
+                Right(())
+              case Some(_) =>
+                Left(OidcError("invalid_grant", Some("code_verifier does not match code_challenge")))
+            }
+        }
+        pkceResult match {
+          case Left(err) =>
+            logger.warn(s"PKCE verification failed for client $clientId: ${err.error_description.getOrElse("")}")
+            BadRequest(err.asJson)
+          case Right(()) =>
         // Get user information - use provider from auth code when available (API mode)
         logger.info(
           s"Looking up user: sub=${authCode.sub}, provider=${authCode.provider.getOrElse("none")}"
@@ -460,6 +492,7 @@ class TokenEndpoint(
               OidcError("invalid_grant", Some("User not found")).asJson
             )
         }
+        } // end pkceResult match
 
       case Left(error) =>
         logger.trace(

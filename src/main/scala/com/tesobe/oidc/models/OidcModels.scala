@@ -38,7 +38,9 @@ case class OidcConfiguration(
     token_endpoint_auth_methods_supported: List[String],
     claims_supported: List[String],
     grant_types_supported: List[String],
-    revocation_endpoint_auth_methods_supported: List[String]
+    revocation_endpoint_auth_methods_supported: List[String],
+    // PKCE (RFC 7636 / RFC 8414): advertised code_challenge methods. FAPI requires S256.
+    code_challenge_methods_supported: List[String] = List("S256")
 )
 
 object OidcConfiguration {
@@ -161,7 +163,11 @@ case class AuthorizationCode(
     nonce: Option[String] = None,
     provider: Option[String] = None,
     exp: Long, // Expiration time
-    consent_id: Option[String] = None
+    consent_id: Option[String] = None,
+    // PKCE (RFC 7636): the S256 code_challenge captured at the authorization request,
+    // verified against the code_verifier at token exchange. None = client did not use PKCE.
+    code_challenge: Option[String] = None,
+    code_challenge_method: Option[String] = None
 )
 
 object AuthorizationCode {

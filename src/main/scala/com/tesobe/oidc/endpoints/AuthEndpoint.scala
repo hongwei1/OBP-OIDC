@@ -68,7 +68,9 @@ class AuthEndpoint(
         NonceQueryParamMatcher(nonce) +&
         ConsentRequestIdQueryParamMatcher(consentRequestId) +&
         BankIdQueryParamMatcher(bankId) +&
-        ConsentIdQueryParamMatcher(consentId) =>
+        ConsentIdQueryParamMatcher(consentId) +&
+        CodeChallengeQueryParamMatcher(codeChallenge) +&
+        CodeChallengeMethodQueryParamMatcher(codeChallengeMethod) =>
       handleAuthorizationRequest(
         responseType,
         clientId,
@@ -78,7 +80,9 @@ class AuthEndpoint(
         nonce,
         consentRequestId,
         bankId,
-        consentId
+        consentId,
+        codeChallenge,
+        codeChallengeMethod
       )
 
     case req @ POST -> Root / "obp-oidc" / "auth" =>
@@ -115,6 +119,11 @@ class AuthEndpoint(
       extends OptionalQueryParamDecoderMatcher[String]("bank_id")
   object ConsentIdQueryParamMatcher
       extends OptionalQueryParamDecoderMatcher[String]("consent_id")
+  // PKCE (RFC 7636)
+  object CodeChallengeQueryParamMatcher
+      extends OptionalQueryParamDecoderMatcher[String]("code_challenge")
+  object CodeChallengeMethodQueryParamMatcher
+      extends OptionalQueryParamDecoderMatcher[String]("code_challenge_method")
 
   // Consent callback query parameter matchers
   object ChallengeQueryParamMatcher
@@ -137,7 +146,9 @@ class AuthEndpoint(
       nonce: Option[String],
       consentRequestId: Option[String] = None,
       bankId: Option[String] = None,
-      consentId: Option[String] = None
+      consentId: Option[String] = None,
+      codeChallenge: Option[String] = None,
+      codeChallengeMethod: Option[String] = None
   ): IO[Response[IO]] = {
 
     IO(
@@ -171,6 +182,16 @@ class AuthEndpoint(
              )
              redirectWithError(redirectUri, error)
            }
+       } else if (codeChallengeMethod.exists(_ != "S256")) {
+         // PKCE (RFC 7636) + FAPI: only S256 is accepted; 'plain' is rejected.
+         IO(logger.warn(s"Unsupported code_challenge_method: ${codeChallengeMethod.getOrElse("")}")) *> {
+           val error = OidcError(
+             "invalid_request",
+             Some("code_challenge_method must be S256"),
+             state = state
+           )
+           redirectWithError(redirectUri, error)
+         }
        } else {
          // Validate client and redirect URI
          IO(
@@ -217,7 +238,7 @@ class AuthEndpoint(
                      // Normal flow: show login form
                      IO(logger.info(s"Client validated, showing login form...")) *>
                        IO(println(s"Client validated, showing login form...")) *>
-                       showLoginForm(clientId, redirectUri, scope, state, nonce, responseType = responseType, consentId = consentId)
+                       showLoginForm(clientId, redirectUri, scope, state, nonce, responseType = responseType, consentId = consentId, codeChallenge = codeChallenge, codeChallengeMethod = codeChallengeMethod)
                  }
                }
            }
@@ -325,6 +346,8 @@ class AuthEndpoint(
       nonce = formData.get("nonce")
       responseType = formData.get("response_type").getOrElse("code")
       consentId = formData.get("consent_id")
+      codeChallenge = formData.get("code_challenge")
+      codeChallengeMethod = formData.get("code_challenge_method")
 
       _ <- IO(
         logger.info(
@@ -348,7 +371,8 @@ class AuthEndpoint(
             ) *>
             generateCodeForUser(
               user, clientId, redirectUri, scope, state, nonce,
-              responseType, consentId = consentId
+              responseType, consentId = consentId,
+              codeChallenge = codeChallenge, codeChallengeMethod = codeChallengeMethod
             )
         case Left(error) =>
           // Authentication failed - record failed attempt for rate limiting
@@ -371,7 +395,9 @@ class AuthEndpoint(
               nonce,
               Some("Incorrect username/password"),
               responseType,
-              consentId
+              consentId,
+              codeChallenge,
+              codeChallengeMethod
             )
       }
     } yield response
@@ -593,12 +619,14 @@ class AuthEndpoint(
       state: Option[String],
       nonce: Option[String],
       responseType: String = "code",
-      consentId: Option[String] = None
+      consentId: Option[String] = None,
+      codeChallenge: Option[String] = None,
+      codeChallengeMethod: Option[String] = None
   ): IO[Response[IO]] = {
     for {
       _ <- statsService.incrementLoginSuccess(user.username)
       code <- codeService
-        .generateCode(clientId, redirectUri, user.sub, scope, state, nonce, user.provider, consentId)
+        .generateCode(clientId, redirectUri, user.sub, scope, state, nonce, user.provider, consentId, codeChallenge, codeChallengeMethod)
       response <- responseType match {
         case "code id_token" =>
           for {
@@ -619,7 +647,9 @@ class AuthEndpoint(
       nonce: Option[String],
       errorMessage: Option[String] = None,
       responseType: String = "code",
-      consentId: Option[String] = None
+      consentId: Option[String] = None,
+      codeChallenge: Option[String] = None,
+      codeChallengeMethod: Option[String] = None
   ): IO[Response[IO]] = {
 
     IO(logger.info(s"showLoginForm called for clientId: $clientId")) *>
@@ -636,6 +666,12 @@ class AuthEndpoint(
           .getOrElse("")
         consentIdParam = consentId
           .map(c => s"""<input type="hidden" name="consent_id" value="${htmlEncode(c)}">""")
+          .getOrElse("")
+        codeChallengeParam = codeChallenge
+          .map(c => s"""<input type="hidden" name="code_challenge" value="${htmlEncode(c)}">""")
+          .getOrElse("")
+        codeChallengeMethodParam = codeChallengeMethod
+          .map(m => s"""<input type="hidden" name="code_challenge_method" value="${htmlEncode(m)}">""")
           .getOrElse("")
 
         providerOptions = providers
@@ -760,6 +796,8 @@ class AuthEndpoint(
             $stateParam
             $nonceParam
             $consentIdParam
+            $codeChallengeParam
+            $codeChallengeMethodParam
 
             <button type="submit">Sign In</button>
           </form>

@@ -38,7 +38,9 @@ trait CodeService[F[_]] {
       state: Option[String] = None,
       nonce: Option[String] = None,
       provider: Option[String] = None,
-      consentId: Option[String] = None
+      consentId: Option[String] = None,
+      codeChallenge: Option[String] = None,
+      codeChallengeMethod: Option[String] = None
   ): F[String]
   def validateAndConsumeCode(
       code: String,
@@ -62,7 +64,9 @@ class InMemoryCodeService(
       state: Option[String] = None,
       nonce: Option[String] = None,
       provider: Option[String] = None,
-      consentId: Option[String] = None
+      consentId: Option[String] = None,
+      codeChallenge: Option[String] = None,
+      codeChallengeMethod: Option[String] = None
   ): IO[String] = {
     for {
       code <- IO(UUID.randomUUID().toString.replace("-", ""))
@@ -81,7 +85,9 @@ class InMemoryCodeService(
         nonce = nonce,
         provider = provider,
         exp = exp,
-        consent_id = consentId
+        consent_id = consentId,
+        code_challenge = codeChallenge,
+        code_challenge_method = codeChallengeMethod
       )
 
       _ <- codesRef.update(_ + (code -> authCode))
