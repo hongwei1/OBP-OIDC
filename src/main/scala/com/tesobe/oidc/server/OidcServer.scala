@@ -27,7 +27,7 @@ import cats.data.Kleisli
 import com.comcast.ip4s.{Host, Port}
 import cats.effect.Ref
 import org.typelevel.ci._
-import com.tesobe.oidc.auth.{CodeService, ParService, HybridAuthService, DatabaseClient, ObpApiCredentialsService, ObpApiClientService}
+import com.tesobe.oidc.auth.{CodeService, ParService, JwksClient, RequestObjectService, HybridAuthService, DatabaseClient, ObpApiCredentialsService, ObpApiClientService}
 import com.tesobe.oidc.models.{ConsentChallenge, OidcClient}
 import com.tesobe.oidc.bootstrap.ClientBootstrap
 import com.tesobe.oidc.config.{Config, OidcConfig, VerifyCredentialsMethod, VerifyClientMethod}
@@ -274,6 +274,8 @@ object OidcServer extends IOApp {
           // Initialize services
           codeService <- CodeService(config)
           parService <- ParService(config)
+          jwksClient <- JwksClient.create().allocated.map(_._1)
+          requestObjectService = RequestObjectService(authService, jwksClient, config)
           jwtService <- JwtService(config)
           statsService <- StatsService()
           statusService <- StatusService
@@ -307,7 +309,8 @@ object OidcServer extends IOApp {
             config,
             jwtService,
             consentChallengesRef,
-            parService
+            parService,
+            requestObjectService
           )
           parEndpoint = ParEndpoint(authService, parService, config)
           tokenEndpoint = TokenEndpoint(

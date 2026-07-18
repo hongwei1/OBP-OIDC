@@ -20,7 +20,7 @@
 package com.tesobe.oidc
 
 import cats.effect.{IO, Ref}
-import com.tesobe.oidc.auth.{CodeService, ParService, MockAuthService}
+import com.tesobe.oidc.auth.{CodeService, ParService, JwksClient, RequestObjectService, MockAuthService}
 import com.tesobe.oidc.config.{DatabaseConfig, OidcConfig, ServerConfig}
 import com.tesobe.oidc.endpoints._
 import com.tesobe.oidc.models._
@@ -55,6 +55,8 @@ class OidcProviderIntegrationTest extends AnyFlatSpec with Matchers {
       authService <- IO(MockAuthService())
       codeService <- CodeService(testConfig)
       parService <- ParService(testConfig)
+      jwksClient <- JwksClient.create().allocated.map(_._1)
+      requestObjectService = RequestObjectService(authService, jwksClient, testConfig)
       jwtService <- JwtService(testConfig)
       statsService <- StatsService()
       rateLimitConfig = RateLimitConfig()
@@ -71,7 +73,8 @@ class OidcProviderIntegrationTest extends AnyFlatSpec with Matchers {
         testConfig,
         jwtService,
         consentChallengesRef,
-        parService
+        parService,
+        requestObjectService
       )
       tokenEndpoint = TokenEndpoint(
         authService,

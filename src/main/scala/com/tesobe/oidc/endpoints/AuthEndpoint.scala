@@ -20,7 +20,7 @@
 package com.tesobe.oidc.endpoints
 
 import cats.effect.{IO, Ref}
-import com.tesobe.oidc.auth.{AuthService, CodeService, ParService}
+import com.tesobe.oidc.auth.{AuthService, CodeService, ParService, RequestObjectService}
 import com.tesobe.oidc.endpoints.HtmlUtils.htmlEncode
 import com.tesobe.oidc.models.{ConsentChallenge, OidcError, User}
 import com.tesobe.oidc.ratelimit.RateLimitService
@@ -45,7 +45,8 @@ class AuthEndpoint(
     config: OidcConfig,
     jwtService: JwtService[IO],
     consentChallengesRef: Ref[IO, Map[String, ConsentChallenge]],
-    parService: ParService[IO]
+    parService: ParService[IO],
+    requestObjectService: RequestObjectService[IO]
 ) {
 
   private val logger = LoggerFactory.getLogger(getClass)
@@ -61,6 +62,15 @@ class AuthEndpoint(
     case GET -> Root / "obp-oidc" / "test-login"
         if config.localDevelopmentMode =>
       showStandaloneLoginForm()
+
+    // Signed request object (JAR / RFC 9101, FAPI 1.0 Advanced): the actual
+    // authorization parameters are inside a JWT signed with the client's own
+    // key, verified against its published JWKS. Matched first so a `request`
+    // param always wins over any (untrusted) plain query params sent alongside it.
+    case GET -> Root / "obp-oidc" / "auth" :?
+        RequestObjectQueryParamMatcher(requestJws) +&
+        ClientIdQueryParamMatcher(clientId) =>
+      handleRequestObject(requestJws, clientId)
 
     // PAR (RFC 9126): request_uri resolves to a previously pushed set of
     // authorization parameters. Matched before the direct-parameter case so
@@ -139,6 +149,9 @@ class AuthEndpoint(
   // PAR (RFC 9126)
   object RequestUriQueryParamMatcher
       extends QueryParamDecoderMatcher[String]("request_uri")
+  // Signed request object (JAR / RFC 9101)
+  object RequestObjectQueryParamMatcher
+      extends QueryParamDecoderMatcher[String]("request")
 
   // Consent callback query parameter matchers
   object ChallengeQueryParamMatcher
@@ -151,6 +164,35 @@ class AuthEndpoint(
       extends OptionalQueryParamDecoderMatcher[String]("username")
   object ProviderCallbackQueryParamMatcher
       extends OptionalQueryParamDecoderMatcher[String]("provider")
+
+  // Signed request object (JAR / RFC 9101, FAPI 1.0 Advanced): verify the JWS
+  // against the client's JWKS and continue with the claims it carries instead
+  // of trusting any plain query parameters. Verification failures return a
+  // direct JSON error — redirect_uri isn't trustworthy until the object is verified.
+  private def handleRequestObject(
+      requestJws: String,
+      clientId: String
+  ): IO[Response[IO]] = {
+    requestObjectService.resolve(requestJws, clientId).flatMap {
+      case Left(error) =>
+        IO(logger.warn(s"Request object verification failed for clientId: $clientId: ${error.error_description.getOrElse(error.error)}")) *>
+          BadRequest(error.asJson)
+      case Right(claims) =>
+        handleAuthorizationRequest(
+          claims.responseType,
+          claims.clientId,
+          claims.redirectUri,
+          claims.scope,
+          claims.state,
+          claims.nonce,
+          claims.consentRequestId,
+          claims.bankId,
+          claims.consentId,
+          claims.codeChallenge,
+          claims.codeChallengeMethod
+        )
+    }
+  }
 
   // PAR (RFC 9126): resolve a previously pushed request_uri into a full set
   // of authorization parameters, then continue through the normal flow.
@@ -1054,7 +1096,8 @@ object AuthEndpoint {
       config: OidcConfig,
       jwtService: JwtService[IO],
       consentChallengesRef: Ref[IO, Map[String, ConsentChallenge]],
-      parService: ParService[IO]
+      parService: ParService[IO],
+      requestObjectService: RequestObjectService[IO]
   ): AuthEndpoint =
     new AuthEndpoint(
       authService,
@@ -1064,6 +1107,7 @@ object AuthEndpoint {
       config,
       jwtService,
       consentChallengesRef,
-      parService
+      parService,
+      requestObjectService
     )
 }
