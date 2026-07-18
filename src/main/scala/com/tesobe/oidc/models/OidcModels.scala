@@ -40,7 +40,10 @@ case class OidcConfiguration(
     grant_types_supported: List[String],
     revocation_endpoint_auth_methods_supported: List[String],
     // PKCE (RFC 7636 / RFC 8414): advertised code_challenge methods. FAPI requires S256.
-    code_challenge_methods_supported: List[String] = List("S256")
+    code_challenge_methods_supported: List[String] = List("S256"),
+    // PAR (RFC 9126)
+    pushed_authorization_request_endpoint: Option[String] = None,
+    require_pushed_authorization_requests: Boolean = false
 )
 
 object OidcConfiguration {
@@ -169,6 +172,31 @@ case class AuthorizationCode(
     code_challenge: Option[String] = None,
     code_challenge_method: Option[String] = None
 )
+
+// PAR (RFC 9126): parameters pushed to /par ahead of the authorization request,
+// resolved later at GET /auth via the request_uri it was issued.
+case class PushedAuthorizationRequest(
+    request_uri: String,
+    client_id: String,
+    response_type: String,
+    redirect_uri: String,
+    scope: String,
+    state: Option[String] = None,
+    nonce: Option[String] = None,
+    consent_request_id: Option[String] = None,
+    bank_id: Option[String] = None,
+    consent_id: Option[String] = None,
+    code_challenge: Option[String] = None,
+    code_challenge_method: Option[String] = None,
+    exp: Long
+)
+
+case class ParResponse(request_uri: String, expires_in: Long)
+
+object ParResponse {
+  implicit val encoder: Encoder[ParResponse] = deriveEncoder
+  implicit val decoder: Decoder[ParResponse] = deriveDecoder
+}
 
 object AuthorizationCode {
   implicit val encoder: Encoder[AuthorizationCode] = deriveEncoder

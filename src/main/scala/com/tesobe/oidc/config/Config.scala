@@ -91,6 +91,7 @@ case class OidcConfig(
     signingKeyPath: Option[String] = None, // PEM file for the RSA signing key; None = ephemeral per-startup key
     tokenExpirationSeconds: Long = 3600, // 1 hour
     codeExpirationSeconds: Long = 600, // 10 minutes
+    parExpirationSeconds: Long = 90, // RFC 9126 recommends a short PAR request_uri lifetime
     obpApiUrl: Option[String] = None,
     localDevelopmentMode: Boolean = false,
     logoUrl: Option[String] = Some(
@@ -187,6 +188,8 @@ object Config {
         sys.env.getOrElse("OIDC_TOKEN_EXPIRATION", "3600").toLong,
       codeExpirationSeconds =
         sys.env.getOrElse("OIDC_CODE_EXPIRATION", "600").toLong,
+      parExpirationSeconds =
+        sys.env.getOrElse("OIDC_PAR_EXPIRATION", "90").toLong,
       obpApiUrl = sys.env.get("OBP_API_URL"),
       localDevelopmentMode =
         sys.env.getOrElse("LOCAL_DEVELOPMENT_MODE", "false").toBoolean,

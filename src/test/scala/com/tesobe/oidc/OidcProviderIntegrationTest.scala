@@ -20,7 +20,7 @@
 package com.tesobe.oidc
 
 import cats.effect.{IO, Ref}
-import com.tesobe.oidc.auth.{CodeService, MockAuthService}
+import com.tesobe.oidc.auth.{CodeService, ParService, MockAuthService}
 import com.tesobe.oidc.config.{DatabaseConfig, OidcConfig, ServerConfig}
 import com.tesobe.oidc.endpoints._
 import com.tesobe.oidc.models._
@@ -54,6 +54,7 @@ class OidcProviderIntegrationTest extends AnyFlatSpec with Matchers {
     for {
       authService <- IO(MockAuthService())
       codeService <- CodeService(testConfig)
+      parService <- ParService(testConfig)
       jwtService <- JwtService(testConfig)
       statsService <- StatsService()
       rateLimitConfig = RateLimitConfig()
@@ -69,7 +70,8 @@ class OidcProviderIntegrationTest extends AnyFlatSpec with Matchers {
         rateLimitService,
         testConfig,
         jwtService,
-        consentChallengesRef
+        consentChallengesRef,
+        parService
       )
       tokenEndpoint = TokenEndpoint(
         authService,
@@ -79,13 +81,15 @@ class OidcProviderIntegrationTest extends AnyFlatSpec with Matchers {
         statsService
       )
       userInfoEndpoint = UserInfoEndpoint(authService, jwtService)
+      parEndpoint = ParEndpoint(authService, parService, testConfig)
 
       routes = Router(
         "/" -> discoveryEndpoint.routes,
         "/" -> jwksEndpoint.routes,
         "/" -> authEndpoint.routes,
         "/" -> tokenEndpoint.routes,
-        "/" -> userInfoEndpoint.routes
+        "/" -> userInfoEndpoint.routes,
+        "/" -> parEndpoint.routes
       ).orNotFound
     } yield routes
   }
@@ -376,6 +380,139 @@ class OidcProviderIntegrationTest extends AnyFlatSpec with Matchers {
       user.name should be(Some("Alice Smith"))
       user.email should be(Some("alice@example.com"))
       user.email_verified should be(Some(true))
+    }
+
+    test.unsafeRunSync()
+  }
+
+  "PAR Endpoint" should "issue a request_uri for a valid pushed authorization request" in {
+    val test = for {
+      app <- createTestApp
+      parForm = UrlForm(
+        "response_type" -> "code",
+        "client_id" -> "test-client",
+        "redirect_uri" -> "https://example.com/callback",
+        "scope" -> "openid profile email",
+        "state" -> "par-state-123",
+        "code_challenge" -> "E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-cM",
+        "code_challenge_method" -> "S256"
+      )
+      parRequest = Request[IO](Method.POST, uri"/obp-oidc/par").withEntity(parForm)
+      parResponse <- app(parRequest)
+      body <- parResponse.as[String]
+    } yield {
+      parResponse.status should be(Status.Created)
+      val par = decode[ParResponse](body)
+      par.isRight should be(true)
+      val parObj = par.getOrElse(throw new Exception("Failed to decode PAR response"))
+      parObj.request_uri should startWith("urn:ietf:params:oauth:request_uri:")
+      parObj.expires_in should be(testConfig.parExpirationSeconds)
+    }
+
+    test.unsafeRunSync()
+  }
+
+  it should "reject a code_challenge_method other than S256" in {
+    val test = for {
+      app <- createTestApp
+      parForm = UrlForm(
+        "response_type" -> "code",
+        "client_id" -> "test-client",
+        "redirect_uri" -> "https://example.com/callback",
+        "scope" -> "openid profile email",
+        "code_challenge" -> "somechallenge",
+        "code_challenge_method" -> "plain"
+      )
+      parRequest = Request[IO](Method.POST, uri"/obp-oidc/par").withEntity(parForm)
+      parResponse <- app(parRequest)
+    } yield {
+      parResponse.status should be(Status.BadRequest)
+    }
+
+    test.unsafeRunSync()
+  }
+
+  "Authorization Endpoint" should "resolve a pushed request_uri into a login form" in {
+    val test = for {
+      app <- createTestApp
+      parForm = UrlForm(
+        "response_type" -> "code",
+        "client_id" -> "test-client",
+        "redirect_uri" -> "https://example.com/callback",
+        "scope" -> "openid profile email",
+        "state" -> "par-resolve-state"
+      )
+      parRequest = Request[IO](Method.POST, uri"/obp-oidc/par").withEntity(parForm)
+      parResponse <- app(parRequest)
+      parBody <- parResponse.as[String]
+      requestUri = decode[ParResponse](parBody)
+        .getOrElse(throw new Exception("Failed to decode PAR response"))
+        .request_uri
+
+      authRequest = Request[IO](
+        Method.GET,
+        Uri
+          .unsafeFromString("/obp-oidc/auth")
+          .withQueryParam("client_id", "test-client")
+          .withQueryParam("request_uri", requestUri)
+      )
+      authResponse <- app(authRequest)
+      authBody <- authResponse.as[String]
+    } yield {
+      authResponse.status should be(Status.Ok)
+      authBody should include("Sign In")
+    }
+
+    test.unsafeRunSync()
+  }
+
+  it should "reject an unknown request_uri" in {
+    val test = for {
+      app <- createTestApp
+      authRequest = Request[IO](
+        Method.GET,
+        Uri
+          .unsafeFromString("/obp-oidc/auth")
+          .withQueryParam("client_id", "test-client")
+          .withQueryParam(
+            "request_uri",
+            "urn:ietf:params:oauth:request_uri:does-not-exist"
+          )
+      )
+      authResponse <- app(authRequest)
+    } yield {
+      authResponse.status should be(Status.BadRequest)
+    }
+
+    test.unsafeRunSync()
+  }
+
+  it should "reject a request_uri reused for a second request (one-time use)" in {
+    val test = for {
+      app <- createTestApp
+      parForm = UrlForm(
+        "response_type" -> "code",
+        "client_id" -> "test-client",
+        "redirect_uri" -> "https://example.com/callback",
+        "scope" -> "openid profile email"
+      )
+      parRequest = Request[IO](Method.POST, uri"/obp-oidc/par").withEntity(parForm)
+      parResponse <- app(parRequest)
+      parBody <- parResponse.as[String]
+      requestUri = decode[ParResponse](parBody)
+        .getOrElse(throw new Exception("Failed to decode PAR response"))
+        .request_uri
+
+      authUri = Uri
+        .unsafeFromString("/obp-oidc/auth")
+        .withQueryParam("client_id", "test-client")
+        .withQueryParam("request_uri", requestUri)
+
+      firstResponse <- app(Request[IO](Method.GET, authUri))
+      secondResponse <- app(Request[IO](Method.GET, authUri))
+    } yield {
+      firstResponse.status should be(Status.Ok)
+      secondResponse.status should be(Status.BadRequest)
     }
 
     test.unsafeRunSync()

@@ -20,13 +20,15 @@
 package com.tesobe.oidc.endpoints
 
 import cats.effect.{IO, Ref}
-import com.tesobe.oidc.auth.{AuthService, CodeService}
+import com.tesobe.oidc.auth.{AuthService, CodeService, ParService}
 import com.tesobe.oidc.endpoints.HtmlUtils.htmlEncode
 import com.tesobe.oidc.models.{ConsentChallenge, OidcError, User}
 import com.tesobe.oidc.ratelimit.RateLimitService
 import com.tesobe.oidc.config.OidcConfig
 import com.tesobe.oidc.tokens.JwtService
+import io.circe.syntax._
 import org.http4s._
+import org.http4s.circe._
 import org.http4s.dsl.io._
 import org.http4s.headers.Location
 import org.slf4j.LoggerFactory
@@ -42,7 +44,8 @@ class AuthEndpoint(
     rateLimitService: RateLimitService[IO],
     config: OidcConfig,
     jwtService: JwtService[IO],
-    consentChallengesRef: Ref[IO, Map[String, ConsentChallenge]]
+    consentChallengesRef: Ref[IO, Map[String, ConsentChallenge]],
+    parService: ParService[IO]
 ) {
 
   private val logger = LoggerFactory.getLogger(getClass)
@@ -58,6 +61,15 @@ class AuthEndpoint(
     case GET -> Root / "obp-oidc" / "test-login"
         if config.localDevelopmentMode =>
       showStandaloneLoginForm()
+
+    // PAR (RFC 9126): request_uri resolves to a previously pushed set of
+    // authorization parameters. Matched before the direct-parameter case so
+    // request_uri-bearing requests (which omit response_type/redirect_uri/
+    // scope from the query string) are intercepted here.
+    case GET -> Root / "obp-oidc" / "auth" :?
+        RequestUriQueryParamMatcher(requestUri) +&
+        ClientIdQueryParamMatcher(clientId) =>
+      handlePushedAuthorizationRequest(requestUri, clientId)
 
     case GET -> Root / "obp-oidc" / "auth" :?
         ResponseTypeQueryParamMatcher(responseType) +&
@@ -124,6 +136,9 @@ class AuthEndpoint(
       extends OptionalQueryParamDecoderMatcher[String]("code_challenge")
   object CodeChallengeMethodQueryParamMatcher
       extends OptionalQueryParamDecoderMatcher[String]("code_challenge_method")
+  // PAR (RFC 9126)
+  object RequestUriQueryParamMatcher
+      extends QueryParamDecoderMatcher[String]("request_uri")
 
   // Consent callback query parameter matchers
   object ChallengeQueryParamMatcher
@@ -136,6 +151,37 @@ class AuthEndpoint(
       extends OptionalQueryParamDecoderMatcher[String]("username")
   object ProviderCallbackQueryParamMatcher
       extends OptionalQueryParamDecoderMatcher[String]("provider")
+
+  // PAR (RFC 9126): resolve a previously pushed request_uri into a full set
+  // of authorization parameters, then continue through the normal flow.
+  // request_uri is one-time-use and validated (existence, expiry, client_id
+  // match) inside parService.consumeRequest before anything else runs.
+  // Resolution failures return a direct JSON error rather than a redirect —
+  // the redirect_uri isn't trustworthy until the request_uri itself is valid.
+  private def handlePushedAuthorizationRequest(
+      requestUri: String,
+      clientId: String
+  ): IO[Response[IO]] = {
+    parService.consumeRequest(requestUri, clientId).flatMap {
+      case Left(error) =>
+        IO(logger.warn(s"PAR resolution failed for clientId: $clientId: ${error.error_description.getOrElse(error.error)}")) *>
+          BadRequest(error.asJson)
+      case Right(par) =>
+        handleAuthorizationRequest(
+          par.response_type,
+          par.client_id,
+          par.redirect_uri,
+          par.scope,
+          par.state,
+          par.nonce,
+          par.consent_request_id,
+          par.bank_id,
+          par.consent_id,
+          par.code_challenge,
+          par.code_challenge_method
+        )
+    }
+  }
 
   private def handleAuthorizationRequest(
       responseType: String,
@@ -1007,7 +1053,8 @@ object AuthEndpoint {
       rateLimitService: RateLimitService[IO],
       config: OidcConfig,
       jwtService: JwtService[IO],
-      consentChallengesRef: Ref[IO, Map[String, ConsentChallenge]]
+      consentChallengesRef: Ref[IO, Map[String, ConsentChallenge]],
+      parService: ParService[IO]
   ): AuthEndpoint =
     new AuthEndpoint(
       authService,
@@ -1016,6 +1063,7 @@ object AuthEndpoint {
       rateLimitService,
       config,
       jwtService,
-      consentChallengesRef
+      consentChallengesRef,
+      parService
     )
 }
