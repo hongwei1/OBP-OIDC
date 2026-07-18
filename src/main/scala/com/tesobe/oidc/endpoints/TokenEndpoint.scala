@@ -21,7 +21,7 @@ package com.tesobe.oidc.endpoints
 
 import cats.effect.IO
 import cats.syntax.all._
-import com.tesobe.oidc.auth.{AuthService, CodeService}
+import com.tesobe.oidc.auth.{AuthService, CodeService, ClientAssertionService}
 import com.tesobe.oidc.models.{OidcError, TokenRequest, TokenResponse}
 import com.tesobe.oidc.tokens.JwtService
 import com.tesobe.oidc.config.OidcConfig
@@ -39,10 +39,12 @@ class TokenEndpoint(
     codeService: CodeService[IO],
     jwtService: JwtService[IO],
     config: OidcConfig,
-    statsService: StatsService[IO]
+    statsService: StatsService[IO],
+    clientAssertionService: ClientAssertionService[IO]
 ) {
 
   private val logger = LoggerFactory.getLogger(getClass)
+  private val tokenEndpointUrl = s"${config.issuer}/token"
 
   val routes: HttpRoutes[IO] = HttpRoutes.of[IO] {
     case req @ POST -> Root / "obp-oidc" / "token" =>
@@ -129,6 +131,11 @@ class TokenEndpoint(
     val credentialSource = if (clientIdFromBasic.isDefined) "Basic auth header" else if (clientIdFromForm.isDefined) "form data" else "NONE"
     val refreshToken = formData.get("refresh_token")
     val codeVerifier = formData.get("code_verifier") // PKCE (RFC 7636)
+    // private_key_jwt client authentication (RFC 7523 / FAPI 1.0 Advanced)
+    val clientAssertionType = formData.get("client_assertion_type")
+    val clientAssertion = formData.get("client_assertion")
+    val usesClientAssertion = clientAssertion.isDefined &&
+      clientAssertionType.contains(ClientAssertionService.JwtBearerAssertionType)
 
     println(s"DEBUG: Grant type extracted: ${grantType}")
     logger.info(s"Grant type: ${grantType.getOrElse("MISSING")}")
@@ -159,49 +166,63 @@ class TokenEndpoint(
             logger.info(
               s"Processing authorization_code grant for client: $clientIdValue"
             )
-            // If credentials are provided (Basic or form), validate client secret
-            credentialsOpt match {
-              case Some((id, secret)) =>
-                if (id != clientIdValue) {
-                  logger.warn(
-                    "Client ID in credentials does not match resolved client_id"
-                  )
-                  BadRequest(
-                    OidcError(
-                      "invalid_client",
-                      Some("Client ID mismatch")
-                    ).asJson
-                  )
-                } else {
-                  authService.authenticateClient(id, secret).flatMap {
-                    case Right(_) =>
-                      logger.trace(
-                        s"About to call processAuthorizationCodeGrant (basic auth validated)"
-                      )
-                      processAuthorizationCodeGrant(
-                        authCode,
-                        redirectUriValue,
-                        clientIdValue,
-                        codeVerifier
-                      )
-                    case Left(error) =>
-                      logger.warn(
-                        s"Client authentication failed for authorization_code: ${error.error}"
-                      )
-                      BadRequest(error.asJson)
+            // private_key_jwt (FAPI 1.0 Advanced) takes priority over Basic/secret auth when present.
+            if (usesClientAssertion) {
+              clientAssertionService.verify(clientAssertion.get, tokenEndpointUrl).flatMap {
+                case Right(assertedClientId) if assertedClientId == clientIdValue =>
+                  processAuthorizationCodeGrant(authCode, redirectUriValue, clientIdValue, codeVerifier)
+                case Right(_) =>
+                  logger.warn("client_assertion's client_id does not match resolved client_id")
+                  BadRequest(OidcError("invalid_client", Some("client_id does not match client_assertion")).asJson)
+                case Left(error) =>
+                  logger.warn(s"Client assertion verification failed for authorization_code: ${error.error}")
+                  BadRequest(error.asJson)
+              }
+            } else {
+              // If credentials are provided (Basic or form), validate client secret
+              credentialsOpt match {
+                case Some((id, secret)) =>
+                  if (id != clientIdValue) {
+                    logger.warn(
+                      "Client ID in credentials does not match resolved client_id"
+                    )
+                    BadRequest(
+                      OidcError(
+                        "invalid_client",
+                        Some("Client ID mismatch")
+                      ).asJson
+                    )
+                  } else {
+                    authService.authenticateClient(id, secret).flatMap {
+                      case Right(_) =>
+                        logger.trace(
+                          s"About to call processAuthorizationCodeGrant (basic auth validated)"
+                        )
+                        processAuthorizationCodeGrant(
+                          authCode,
+                          redirectUriValue,
+                          clientIdValue,
+                          codeVerifier
+                        )
+                      case Left(error) =>
+                        logger.warn(
+                          s"Client authentication failed for authorization_code: ${error.error}"
+                        )
+                        BadRequest(error.asJson)
+                    }
                   }
-                }
-              case None =>
-                // Public client (no secret) or legacy behavior
-                logger.trace(
-                  s"About to call processAuthorizationCodeGrant (no client secret provided)"
-                )
-                processAuthorizationCodeGrant(
-                  authCode,
-                  redirectUriValue,
-                  clientIdValue,
-                  codeVerifier
-                )
+                case None =>
+                  // Public client (no secret) or legacy behavior
+                  logger.trace(
+                    s"About to call processAuthorizationCodeGrant (no client secret provided)"
+                  )
+                  processAuthorizationCodeGrant(
+                    authCode,
+                    redirectUriValue,
+                    clientIdValue,
+                    codeVerifier
+                  )
+              }
             }
           case _ =>
             println(
@@ -241,37 +262,49 @@ class TokenEndpoint(
         println(s"DEBUG: Matched client_credentials case")
         logger.info(s"Processing client_credentials grant")
 
-        // Extract client credentials from Basic Auth header or form data
-        val credentials = extractBasicAuthCredentials(req).orElse {
-          (formData.get("client_id"), formData.get("client_secret")) match {
-            case (Some(id), Some(secret)) => Some((id, secret))
-            case _                        => None
-          }
-        }
+        val scope = formData.getOrElse("scope", "")
 
-        credentials match {
-          case Some((clientIdValue, clientSecretValue)) =>
-            val scope = formData.getOrElse("scope", "")
-            processClientCredentialsGrant(
-              clientIdValue,
-              clientSecretValue,
-              scope
-            )
-          case None =>
-            println(
-              s"DEBUG: Missing client credentials for client_credentials"
-            )
-            logger.warn(
-              s"Missing client credentials for client_credentials grant"
-            )
-            BadRequest(
-              OidcError(
-                "invalid_request",
-                Some(
-                  "Missing client_id and client_secret for client_credentials grant"
-                )
-              ).asJson
-            )
+        if (usesClientAssertion) {
+          clientAssertionService.verify(clientAssertion.get, tokenEndpointUrl).flatMap {
+            case Right(assertedClientId) =>
+              logger.trace("client_credentials authenticated via client_assertion")
+              issueClientCredentialsToken(assertedClientId, scope)
+            case Left(error) =>
+              logger.warn(s"Client assertion verification failed for client_credentials: ${error.error}")
+              BadRequest(error.asJson)
+          }
+        } else {
+          // Extract client credentials from Basic Auth header or form data
+          val credentials = extractBasicAuthCredentials(req).orElse {
+            (formData.get("client_id"), formData.get("client_secret")) match {
+              case (Some(id), Some(secret)) => Some((id, secret))
+              case _                        => None
+            }
+          }
+
+          credentials match {
+            case Some((clientIdValue, clientSecretValue)) =>
+              processClientCredentialsGrant(
+                clientIdValue,
+                clientSecretValue,
+                scope
+              )
+            case None =>
+              println(
+                s"DEBUG: Missing client credentials for client_credentials"
+              )
+              logger.warn(
+                s"Missing client credentials for client_credentials grant"
+              )
+              BadRequest(
+                OidcError(
+                  "invalid_request",
+                  Some(
+                    "Missing client_id and client_secret for client_credentials grant"
+                  )
+                ).asJson
+              )
+          }
         }
       case Some(unsupportedGrant) =>
         println(
@@ -657,41 +690,7 @@ class TokenEndpoint(
     authService.authenticateClient(clientId, clientSecret).flatMap {
       case Right(client) =>
         logger.info(s"Client authenticated: ${client.client_name}")
-
-        for {
-          // Generate access token for the client (no user context)
-          accessToken <- jwtService
-            .generateClientCredentialsToken(clientId, scope)
-
-          // Create token response (no ID token or refresh token for client credentials)
-          tokenResponse = TokenResponse(
-            access_token = accessToken,
-            token_type = "Bearer",
-            expires_in = config.tokenExpirationSeconds,
-            id_token = "", // Not included in client credentials response
-            scope = scope,
-            refresh_token = None // No refresh token for client credentials
-          )
-
-          _ <- IO.pure(
-            logger.info(
-              s"Client credentials grant successful for client: $clientId"
-            )
-          )
-
-          // Track successful client credentials grant
-          _ <- statsService
-            .incrementAuthorizationCodeSuccess(clientId, clientId)
-
-          response <- Ok(tokenResponse.asJson)
-            .map(
-              _.putHeaders(
-                Header.Raw(CIString("Cache-Control"), "no-store"),
-                Header.Raw(CIString("Pragma"), "no-cache")
-              )
-            )
-
-        } yield response
+        issueClientCredentialsToken(clientId, scope)
 
       case Left(error) =>
         logger.warn(
@@ -702,6 +701,49 @@ class TokenEndpoint(
           .flatMap(_ => BadRequest(error.asJson))
     }
   }
+
+  // Issues the client_credentials access token; the caller is responsible for
+  // having already authenticated clientId, whether via client_secret or a
+  // verified private_key_jwt client_assertion.
+  private def issueClientCredentialsToken(
+      clientId: String,
+      scope: String
+  ): IO[Response[IO]] = {
+    for {
+      // Generate access token for the client (no user context)
+      accessToken <- jwtService
+        .generateClientCredentialsToken(clientId, scope)
+
+      // Create token response (no ID token or refresh token for client credentials)
+      tokenResponse = TokenResponse(
+        access_token = accessToken,
+        token_type = "Bearer",
+        expires_in = config.tokenExpirationSeconds,
+        id_token = "", // Not included in client credentials response
+        scope = scope,
+        refresh_token = None // No refresh token for client credentials
+      )
+
+      _ <- IO.pure(
+        logger.info(
+          s"Client credentials grant successful for client: $clientId"
+        )
+      )
+
+      // Track successful client credentials grant
+      _ <- statsService
+        .incrementAuthorizationCodeSuccess(clientId, clientId)
+
+      response <- Ok(tokenResponse.asJson)
+        .map(
+          _.putHeaders(
+            Header.Raw(CIString("Cache-Control"), "no-store"),
+            Header.Raw(CIString("Pragma"), "no-cache")
+          )
+        )
+
+    } yield response
+  }
 }
 
 object TokenEndpoint {
@@ -710,13 +752,15 @@ object TokenEndpoint {
       codeService: CodeService[IO],
       jwtService: JwtService[IO],
       config: OidcConfig,
-      statsService: StatsService[IO]
+      statsService: StatsService[IO],
+      clientAssertionService: ClientAssertionService[IO]
   ): TokenEndpoint =
     new TokenEndpoint(
       authService,
       codeService,
       jwtService,
       config,
-      statsService
+      statsService,
+      clientAssertionService
     )
 }

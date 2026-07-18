@@ -43,7 +43,10 @@ case class OidcConfiguration(
     code_challenge_methods_supported: List[String] = List("S256"),
     // PAR (RFC 9126)
     pushed_authorization_request_endpoint: Option[String] = None,
-    require_pushed_authorization_requests: Boolean = false
+    require_pushed_authorization_requests: Boolean = false,
+    // private_key_jwt (RFC 7523): algorithms this server accepts on a client_assertion signature.
+    token_endpoint_auth_signing_alg_values_supported: List[String] =
+      List("RS256", "RS384", "RS512", "ES256", "ES384", "ES512")
 )
 
 object OidcConfiguration {

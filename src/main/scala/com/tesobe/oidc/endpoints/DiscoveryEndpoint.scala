@@ -52,7 +52,7 @@ class DiscoveryEndpoint(config: OidcConfig) {
       id_token_signing_alg_values_supported = List("RS256"),
       scopes_supported = List("openid", "profile", "email"),
       token_endpoint_auth_methods_supported =
-        List("client_secret_post", "client_secret_basic", "none"),
+        List("client_secret_post", "client_secret_basic", "none", "private_key_jwt"),
       claims_supported = List("sub", "name", "email", "email_verified", "consent_id", "openbanking_intent_id"),
       grant_types_supported =
         List("authorization_code", "refresh_token", "client_credentials"),
@@ -78,7 +78,7 @@ class DiscoveryEndpoint(config: OidcConfig) {
       id_token_signing_alg_values_supported = List("RS256"),
       scopes_supported = List("openid", "profile", "email"),
       token_endpoint_auth_methods_supported =
-        List("client_secret_post", "client_secret_basic", "none"),
+        List("client_secret_post", "client_secret_basic", "none", "private_key_jwt"),
       claims_supported = List("sub", "name", "email", "email_verified", "consent_id", "openbanking_intent_id"),
       grant_types_supported =
         List("authorization_code", "refresh_token", "client_credentials"),

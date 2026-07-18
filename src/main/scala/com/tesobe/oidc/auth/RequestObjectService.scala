@@ -20,8 +20,7 @@
 package com.tesobe.oidc.auth
 
 import cats.effect.IO
-import com.nimbusds.jose.crypto.{ECDSAVerifier, RSASSAVerifier}
-import com.nimbusds.jose.jwk.{ECKey, JWK, JWKSet, RSAKey}
+import com.nimbusds.jose.jwk.JWKSet
 import com.nimbusds.jwt.SignedJWT
 import com.tesobe.oidc.config.OidcConfig
 import com.tesobe.oidc.models.OidcError
@@ -142,7 +141,7 @@ class DefaultRequestObjectService(
         case Left(msg)   => reject[JWKSet](OidcError("invalid_request_object", Some(msg)))
       }
 
-      verified = verifySignature(signedJwt, jwks)
+      verified = JwsClientVerifier.verify(signedJwt, jwks)
       _ <- require(verified, OidcError("invalid_request_object", Some("Signature verification failed")))
 
       responseType <- requireSome(
@@ -180,20 +179,6 @@ class DefaultRequestObjectService(
     }
   }
 
-  private def verifySignature(signedJwt: SignedJWT, jwks: JWKSet): Boolean = {
-    val keyId = Option(signedJwt.getHeader.getKeyID)
-    val candidates: List[JWK] = keyId match {
-      case Some(kid) => Option(jwks.getKeyByKeyId(kid)).toList
-      case None       => jwks.getKeys.asScala.toList
-    }
-
-    candidates
-      .collectFirst {
-        case rsaKey: RSAKey => Try(signedJwt.verify(new RSASSAVerifier(rsaKey))).getOrElse(false)
-        case ecKey: ECKey   => Try(signedJwt.verify(new ECDSAVerifier(ecKey))).getOrElse(false)
-      }
-      .getOrElse(false)
-  }
 }
 
 object RequestObjectService {
