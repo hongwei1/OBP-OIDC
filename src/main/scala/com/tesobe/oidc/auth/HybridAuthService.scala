@@ -666,7 +666,7 @@ class HybridAuthService(
     logger.debug(s"Looking up client via database for client_id: $clientId")
     val query = sql"""
       SELECT client_id, client_secret, client_name, consumer_id, redirect_uris,
-             grant_types, response_types, scopes, token_endpoint_auth_method, created_at
+             grant_types, response_types, scopes, token_endpoint_auth_method, created_at, jwks_uri
       FROM v_oidc_clients
       WHERE client_id = $clientId
     """.query[DatabaseClient]
@@ -690,7 +690,7 @@ class HybridAuthService(
   def findDatabaseClientById(clientId: String): IO[Option[DatabaseClient]] = {
     val query = sql"""
       SELECT client_id, client_secret, client_name, consumer_id, redirect_uris,
-             grant_types, response_types, scopes, token_endpoint_auth_method, created_at
+             grant_types, response_types, scopes, token_endpoint_auth_method, created_at, jwks_uri
       FROM v_oidc_clients
       WHERE client_id = $clientId
     """.query[DatabaseClient]
@@ -865,7 +865,7 @@ class HybridAuthService(
     println(s"   Looking in v_oidc_clients view with column 'client_name'")
     val query = sql"""
       SELECT client_id, client_secret, client_name, consumer_id, redirect_uris,
-             grant_types, response_types, scopes, token_endpoint_auth_method, created_at
+             grant_types, response_types, scopes, token_endpoint_auth_method, created_at, jwks_uri
       FROM v_oidc_clients
       WHERE client_name = $clientName
       LIMIT 1
@@ -931,7 +931,7 @@ class HybridAuthService(
     )
     val query = sql"""
       SELECT client_id, client_secret, client_name, consumer_id, redirect_uris,
-             grant_types, response_types, scopes, token_endpoint_auth_method, created_at
+             grant_types, response_types, scopes, token_endpoint_auth_method, created_at, jwks_uri
       FROM v_oidc_clients
       WHERE client_name = $clientName
       ORDER BY created_at ASC
@@ -1006,14 +1006,14 @@ class HybridAuthService(
           INSERT INTO v_oidc_admin_clients (
             name, apptype, description, developeremail, sub,
             secret, azp, aud, iss, redirecturl, company, key_c, consumerid, isactive,
-            createdat, updatedat
+            createdat, updatedat, jwksuri
           ) VALUES (
             ${adminClient.name}, ${adminClient.apptype}, ${adminClient.description},
             ${adminClient.developeremail}, ${adminClient.sub},
             ${adminClient.secret}, ${adminClient.azp}, ${adminClient.aud},
             ${adminClient.iss}, ${adminClient.redirecturl}, ${adminClient.company},
             ${adminClient.key_c}, ${adminClient.consumerid}, ${adminClient.isactive},
-            ${adminClient.createdat}, ${adminClient.updatedat}
+            ${adminClient.createdat}, ${adminClient.updatedat}, ${adminClient.jwksuri}
           )
         """.update
 
@@ -1152,7 +1152,7 @@ class HybridAuthService(
 
     val query = sql"""
       SELECT client_id, client_secret, client_name, consumer_id, redirect_uris,
-             grant_types, response_types, scopes, token_endpoint_auth_method, created_at
+             grant_types, response_types, scopes, token_endpoint_auth_method, created_at, jwks_uri
       FROM v_oidc_clients
       ORDER BY client_name ASC
     """.query[DatabaseClient]
@@ -1213,7 +1213,7 @@ class HybridAuthService(
         val query = sql"""
           SELECT name, apptype, description, developeremail, sub,
                  createdat, updatedat, secret, azp, aud, iss, redirecturl,
-                 logourl, userauthenticationurl, clientcertificate, company, key_c, consumerid, isactive
+                 logourl, userauthenticationurl, clientcertificate, company, key_c, consumerid, isactive, jwksuri
           FROM v_oidc_admin_clients
           WHERE key_c = $clientId
         """.query[AdminDatabaseClient]
@@ -1459,7 +1459,8 @@ case class DatabaseClient(
     response_types: Option[String], // Simple string from database
     scopes: Option[String], // Simple string from database
     token_endpoint_auth_method: Option[String],
-    created_at: Option[String]
+    created_at: Option[String],
+    jwks_uri: Option[String] = None
 ) {
   def toOidcClient: OidcClient = OidcClient(
     client_id = client_id,
@@ -1471,7 +1472,8 @@ case class DatabaseClient(
     response_types = parseSimpleString(response_types.orNull),
     scopes = parseSimpleString(scopes.orNull),
     token_endpoint_auth_method = token_endpoint_auth_method.getOrElse(""),
-    created_at = created_at
+    created_at = created_at,
+    jwks_uri = jwks_uri.filter(_.trim.nonEmpty)
   )
 
   private def parseSimpleString(str: String): List[String] = {
@@ -1508,7 +1510,8 @@ case class AdminDatabaseClient(
     key_c: Option[
       String
     ], // OAuth1/OAuth2 client identifier (maps to client_id in views)
-    isactive: Option[Boolean] // is active
+    isactive: Option[Boolean], // is active
+    jwksuri: Option[String] = None // FAPI: client's JWKS URL
 ) {
   def toOidcClient: OidcClient = OidcClient(
     client_id = key_c.getOrElse(""), // Use key_c as the OAuth2 identifier
@@ -1525,7 +1528,8 @@ case class AdminDatabaseClient(
     response_types = List("code"),
     scopes = List("openid", "profile", "email"),
     token_endpoint_auth_method = "client_secret_basic",
-    created_at = createdat.map(_.toString)
+    created_at = createdat.map(_.toString),
+    jwks_uri = jwksuri.filter(_.trim.nonEmpty)
   )
 
   private def parseSimpleString(str: String): List[String] = {
@@ -1562,7 +1566,8 @@ object AdminDatabaseClient {
     key_c = Some(
       client.client_id
     ), // Use client_id as the OAuth2 identifier (maps to key_c in database)
-    isactive = Some(true)
+    isactive = Some(true),
+    jwksuri = client.jwks_uri
   )
 }
 
@@ -1876,7 +1881,8 @@ object DatabaseUserInstances {
           Option[String],
           Option[String],
           Option[String],
-          Option[Boolean]
+          Option[Boolean],
+          Option[String]
       )
     ]
       .map {
@@ -1899,7 +1905,8 @@ object DatabaseUserInstances {
               company,
               key_c,
               consumerid,
-              isactive
+              isactive,
+              jwksuri
             ) =>
           AdminDatabaseClient(
             name = name,
@@ -1920,7 +1927,8 @@ object DatabaseUserInstances {
             company = company,
             key_c = key_c,
             consumerid = consumerid,
-            isactive = isactive
+            isactive = isactive,
+            jwksuri = jwksuri
           )
       }
 
@@ -1937,7 +1945,8 @@ object DatabaseUserInstances {
           Option[String], // response_types
           Option[String], // scopes
           Option[String], // token_endpoint_auth_method
-          Option[String] // created_at
+          Option[String], // created_at
+          Option[String] // jwks_uri
       )
     ]
       .map {
@@ -1951,7 +1960,8 @@ object DatabaseUserInstances {
               response_types,
               scopes,
               token_endpoint_auth_method,
-              created_at
+              created_at,
+              jwks_uri
             ) =>
           DatabaseClient(
             client_id = client_id,
@@ -1963,7 +1973,8 @@ object DatabaseUserInstances {
             response_types = response_types,
             scopes = scopes,
             token_endpoint_auth_method = token_endpoint_auth_method,
-            created_at = created_at
+            created_at = created_at,
+            jwks_uri = jwks_uri
           )
       }
 }

@@ -132,7 +132,10 @@ case class OidcClient(
     response_types: List[String] = List("code"),
     scopes: List[String] = List("openid", "profile", "email"),
     token_endpoint_auth_method: String = "client_secret_post",
-    created_at: Option[String] = None
+    created_at: Option[String] = None,
+    // FAPI 1.0 Advanced: URL where this client publishes its JWKS, used to verify
+    // signed request objects and private_key_jwt client assertions.
+    jwks_uri: Option[String] = None
 )
 
 object OidcClient {

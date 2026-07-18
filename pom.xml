@@ -19,6 +19,7 @@
     <cats.effect.version>3.5.7</cats.effect.version>
     <circe.version>0.14.9</circe.version>
     <java.jwt.version>4.4.0</java.jwt.version>
+    <nimbus.jose.jwt.version>9.40</nimbus.jose.jwt.version>
     <logback.version>1.2.13</logback.version>
     <scalatest.version>3.2.19</scalatest.version>
     <doobie.version>1.0.0-RC4</doobie.version>
@@ -107,6 +108,14 @@
       <groupId>com.auth0</groupId>
       <artifactId>java-jwt</artifactId>
       <version>${java.jwt.version}</version>
+    </dependency>
+    <!-- FAPI: JWS/JWE verification for signed request objects and private_key_jwt
+         client assertions, and remote JWKS resolution for client public keys.
+         auth0 java-jwt (above) remains the RS256 issuer/signer for OBP-OIDC's own tokens. -->
+    <dependency>
+      <groupId>com.nimbusds</groupId>
+      <artifactId>nimbus-jose-jwt</artifactId>
+      <version>${nimbus.jose.jwt.version}</version>
     </dependency>
 
     <!-- Database access -->
