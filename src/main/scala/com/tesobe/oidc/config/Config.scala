@@ -115,7 +115,12 @@ case class OidcConfig(
     // client-supplied value) and to only set it after a real TLS handshake
     // presented and validated a client certificate.
     mtlsEnabled: Boolean = false,
-    mtlsClientCertHeader: String = "X-SSL-Client-Cert"
+    mtlsClientCertHeader: String = "X-SSL-Client-Cert",
+    // FAPI 1.0 Advanced's strict profile disallows plain RSASSA (RS256); PS256
+    // (RSASSA-PSS) is required instead. Kept RS256 by default — flipping this is a
+    // breaking change for every existing client validating tokens against this
+    // server's JWKS, so it must be an explicit opt-in, not silently switched.
+    signingAlgorithm: String = "RS256"
 ) {
 
   /** Derived method settings from useVerifyEndpoints */
@@ -227,7 +232,8 @@ object Config {
       obpApiRetryDelaySeconds = sys.env.getOrElse("OBP_API_RETRY_DELAY_SECONDS", "30").toInt,
       dbVendor = dbVendor,
       mtlsEnabled = sys.env.getOrElse("OIDC_MTLS_ENABLED", "false").toBoolean,
-      mtlsClientCertHeader = sys.env.getOrElse("OIDC_MTLS_CLIENT_CERT_HEADER", "X-SSL-Client-Cert")
+      mtlsClientCertHeader = sys.env.getOrElse("OIDC_MTLS_CLIENT_CERT_HEADER", "X-SSL-Client-Cert"),
+      signingAlgorithm = sys.env.getOrElse("OIDC_SIGNING_ALGORITHM", "RS256")
     )
   }
 }

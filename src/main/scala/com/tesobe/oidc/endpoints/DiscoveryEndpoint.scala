@@ -50,7 +50,7 @@ class DiscoveryEndpoint(config: OidcConfig) {
       registration_endpoint = if (config.enableDynamicClientRegistration) Some(s"${config.issuer}/connect/register") else None,
       response_types_supported = List("code", "code id_token"),
       subject_types_supported = List("public"),
-      id_token_signing_alg_values_supported = List("RS256"),
+      id_token_signing_alg_values_supported = List(config.signingAlgorithm),
       scopes_supported = List("openid", "profile", "email"),
       token_endpoint_auth_methods_supported =
         List("client_secret_post", "client_secret_basic", "none", "private_key_jwt", "tls_client_auth"),
@@ -77,7 +77,7 @@ class DiscoveryEndpoint(config: OidcConfig) {
       registration_endpoint = if (config.enableDynamicClientRegistration) Some(s"${config.issuer}/connect/register") else None,
       response_types_supported = List("code", "code id_token"),
       subject_types_supported = List("public"),
-      id_token_signing_alg_values_supported = List("RS256"),
+      id_token_signing_alg_values_supported = List(config.signingAlgorithm),
       scopes_supported = List("openid", "profile", "email"),
       token_endpoint_auth_methods_supported =
         List("client_secret_post", "client_secret_basic", "none", "private_key_jwt", "tls_client_auth"),

@@ -93,10 +93,12 @@ class JwtServiceImpl(config: OidcConfig, keyPairRef: Ref[IO, KeyPair])
 
   private def getAlgorithm: IO[Algorithm] =
     keyPairRef.get.map { keyPair =>
-      Algorithm.RSA256(
-        keyPair.getPublic.asInstanceOf[RSAPublicKey],
-        keyPair.getPrivate.asInstanceOf[RSAPrivateKey]
-      )
+      val publicKey = keyPair.getPublic.asInstanceOf[RSAPublicKey]
+      val privateKey = keyPair.getPrivate.asInstanceOf[RSAPrivateKey]
+      config.signingAlgorithm match {
+        case "PS256" => new PS256Algorithm(publicKey, privateKey)
+        case _       => Algorithm.RSA256(publicKey, privateKey)
+      }
     }
 
   def generateIdToken(
@@ -517,7 +519,7 @@ class JwtServiceImpl(config: OidcConfig, keyPairRef: Ref[IO, KeyPair])
         kty = "RSA",
         use = "sig",
         kid = config.keyId,
-        alg = "RS256",
+        alg = config.signingAlgorithm,
         n = modulus,
         e = exponent
       )

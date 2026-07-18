@@ -113,4 +113,58 @@ class JwtServiceTest extends AnyFunSuite with Matchers {
 
     test.unsafeRunSync()
   }
+
+  // FAPI 1.0 Advanced's strict profile requires PS256 instead of plain RS256.
+  test("default config signs with RS256") {
+    val test = for {
+      jwtService <- JwtService(testConfig)
+      token <- jwtService.generateIdToken(testUser, "test-client")
+    } yield {
+      JWT.decode(token).getAlgorithm shouldBe "RS256"
+    }
+
+    test.unsafeRunSync()
+  }
+
+  test("PS256 config signs with PS256 and the token verifies") {
+    val ps256Config = testConfig.copy(signingAlgorithm = "PS256")
+    val test = for {
+      jwtService <- JwtService(ps256Config)
+      idToken <- jwtService.generateIdToken(testUser, "test-client")
+      accessToken <- jwtService.generateAccessToken(testUser, "test-client", "openid profile")
+      verified <- jwtService.validateAccessToken(accessToken)
+    } yield {
+      JWT.decode(idToken).getAlgorithm shouldBe "PS256"
+      JWT.decode(accessToken).getAlgorithm shouldBe "PS256"
+      verified.isRight shouldBe true
+    }
+
+    test.unsafeRunSync()
+  }
+
+  test("PS256 config is reflected in the published JWKS") {
+    val ps256Config = testConfig.copy(signingAlgorithm = "PS256")
+    val test = for {
+      jwtService <- JwtService(ps256Config)
+      jwk <- jwtService.getJsonWebKey
+    } yield {
+      jwk.alg shouldBe "PS256"
+    }
+
+    test.unsafeRunSync()
+  }
+
+  test("a PS256 token rejects tampering (signature no longer verifies)") {
+    val ps256Config = testConfig.copy(signingAlgorithm = "PS256")
+    val test = for {
+      jwtService <- JwtService(ps256Config)
+      token <- jwtService.generateAccessToken(testUser, "test-client", "openid profile")
+      tampered = token.dropRight(4) + "AAAA" // corrupt the signature segment
+      verified <- jwtService.validateAccessToken(tampered)
+    } yield {
+      verified.isLeft shouldBe true
+    }
+
+    test.unsafeRunSync()
+  }
 }
