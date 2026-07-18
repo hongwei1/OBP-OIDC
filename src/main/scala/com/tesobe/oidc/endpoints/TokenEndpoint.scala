@@ -21,7 +21,7 @@ package com.tesobe.oidc.endpoints
 
 import cats.effect.IO
 import cats.syntax.all._
-import com.tesobe.oidc.auth.{AuthService, CodeService, ClientAssertionService}
+import com.tesobe.oidc.auth.{AuthService, CodeService, ClientAssertionService, MtlsService, MtlsCertificate}
 import com.tesobe.oidc.models.{OidcError, TokenRequest, TokenResponse}
 import com.tesobe.oidc.tokens.JwtService
 import com.tesobe.oidc.config.OidcConfig
@@ -40,7 +40,8 @@ class TokenEndpoint(
     jwtService: JwtService[IO],
     config: OidcConfig,
     statsService: StatsService[IO],
-    clientAssertionService: ClientAssertionService[IO]
+    clientAssertionService: ClientAssertionService[IO],
+    mtlsService: MtlsService[IO]
 ) {
 
   private val logger = LoggerFactory.getLogger(getClass)
@@ -106,6 +107,23 @@ class TokenEndpoint(
       }
   }
 
+  // tls_client_auth (RFC 8705 §2.1): the presented certificate's thumbprint must
+  // match the client's registered certificate. On success returns that thumbprint
+  // for use as the cnf claim on the token this authenticates (sender-constraining).
+  private def verifyTlsClientAuth(
+      clientId: String,
+      presented: MtlsCertificate
+  ): IO[Either[OidcError, String]] = {
+    authService.findClientByClientIdThatIsKey(clientId).map { clientOpt =>
+      clientOpt.flatMap(_.client_certificate) match {
+        case None =>
+          Left(OidcError("invalid_client", Some(s"Client $clientId has no registered certificate")))
+        case Some(registeredPem) =>
+          mtlsService.verifyClientCertificate(presented, registeredPem).map(_ => presented.thumbprint)
+      }
+    }
+  }
+
   private def handleTokenRequest(
       req: Request[IO],
       form: UrlForm
@@ -136,6 +154,9 @@ class TokenEndpoint(
     val clientAssertion = formData.get("client_assertion")
     val usesClientAssertion = clientAssertion.isDefined &&
       clientAssertionType.contains(ClientAssertionService.JwtBearerAssertionType)
+    // tls_client_auth (RFC 8705, FAPI 1.0 Advanced): the reverse proxy-forwarded
+    // client certificate, when mTLS is enabled and the header is present/parseable.
+    val presentedCert: Option[MtlsCertificate] = mtlsService.extractPresentedCertificate(req)
 
     println(s"DEBUG: Grant type extracted: ${grantType}")
     logger.info(s"Grant type: ${grantType.getOrElse("MISSING")}")
@@ -166,7 +187,8 @@ class TokenEndpoint(
             logger.info(
               s"Processing authorization_code grant for client: $clientIdValue"
             )
-            // private_key_jwt (FAPI 1.0 Advanced) takes priority over Basic/secret auth when present.
+            // private_key_jwt and tls_client_auth (FAPI 1.0 Advanced) take priority over
+            // Basic/secret auth when present; private_key_jwt wins if both are somehow sent.
             if (usesClientAssertion) {
               clientAssertionService.verify(clientAssertion.get, tokenEndpointUrl).flatMap {
                 case Right(assertedClientId) if assertedClientId == clientIdValue =>
@@ -176,6 +198,14 @@ class TokenEndpoint(
                   BadRequest(OidcError("invalid_client", Some("client_id does not match client_assertion")).asJson)
                 case Left(error) =>
                   logger.warn(s"Client assertion verification failed for authorization_code: ${error.error}")
+                  BadRequest(error.asJson)
+              }
+            } else if (presentedCert.isDefined) {
+              verifyTlsClientAuth(clientIdValue, presentedCert.get).flatMap {
+                case Right(thumbprint) =>
+                  processAuthorizationCodeGrant(authCode, redirectUriValue, clientIdValue, codeVerifier, Some(thumbprint))
+                case Left(error) =>
+                  logger.warn(s"tls_client_auth verification failed for authorization_code: ${error.error}")
                   BadRequest(error.asJson)
               }
             } else {
@@ -273,6 +303,15 @@ class TokenEndpoint(
               logger.warn(s"Client assertion verification failed for client_credentials: ${error.error}")
               BadRequest(error.asJson)
           }
+        } else if (presentedCert.isDefined && resolvedClientId.isDefined) {
+          verifyTlsClientAuth(resolvedClientId.get, presentedCert.get).flatMap {
+            case Right(thumbprint) =>
+              logger.trace("client_credentials authenticated via tls_client_auth")
+              issueClientCredentialsToken(resolvedClientId.get, scope, Some(thumbprint))
+            case Left(error) =>
+              logger.warn(s"tls_client_auth verification failed for client_credentials: ${error.error}")
+              BadRequest(error.asJson)
+          }
         } else {
           // Extract client credentials from Basic Auth header or form data
           val credentials = extractBasicAuthCredentials(req).orElse {
@@ -341,7 +380,8 @@ class TokenEndpoint(
       code: String,
       redirectUri: String,
       clientId: String,
-      codeVerifier: Option[String] = None
+      codeVerifier: Option[String] = None,
+      cnfThumbprint: Option[String] = None
   ): IO[Response[IO]] = {
 
     logger.info(s"Validating authorization code for client: $clientId")
@@ -420,7 +460,7 @@ class TokenEndpoint(
                 )
               )
               accessToken <- jwtService
-                .generateAccessToken(user, clientId, authCode.scope, authCode.consent_id)
+                .generateAccessToken(user, clientId, authCode.scope, authCode.consent_id, cnfThumbprint)
               _ <- IO.pure(
                 logger.trace(
                   s"Access token generated successfully"
@@ -703,16 +743,17 @@ class TokenEndpoint(
   }
 
   // Issues the client_credentials access token; the caller is responsible for
-  // having already authenticated clientId, whether via client_secret or a
-  // verified private_key_jwt client_assertion.
+  // having already authenticated clientId, whether via client_secret, a
+  // verified private_key_jwt client_assertion, or tls_client_auth.
   private def issueClientCredentialsToken(
       clientId: String,
-      scope: String
+      scope: String,
+      cnfThumbprint: Option[String] = None
   ): IO[Response[IO]] = {
     for {
       // Generate access token for the client (no user context)
       accessToken <- jwtService
-        .generateClientCredentialsToken(clientId, scope)
+        .generateClientCredentialsToken(clientId, scope, cnfThumbprint)
 
       // Create token response (no ID token or refresh token for client credentials)
       tokenResponse = TokenResponse(
@@ -753,7 +794,8 @@ object TokenEndpoint {
       jwtService: JwtService[IO],
       config: OidcConfig,
       statsService: StatsService[IO],
-      clientAssertionService: ClientAssertionService[IO]
+      clientAssertionService: ClientAssertionService[IO],
+      mtlsService: MtlsService[IO]
   ): TokenEndpoint =
     new TokenEndpoint(
       authService,
@@ -761,6 +803,7 @@ object TokenEndpoint {
       jwtService,
       config,
       statsService,
-      clientAssertionService
+      clientAssertionService,
+      mtlsService
     )
 }

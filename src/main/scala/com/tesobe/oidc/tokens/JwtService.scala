@@ -62,7 +62,8 @@ trait JwtService[F[_]] {
       user: User,
       clientId: String,
       scope: String,
-      consentId: Option[String] = None
+      consentId: Option[String] = None,
+      cnfThumbprint: Option[String] = None
   ): F[String]
   def generateRefreshToken(
       user: User,
@@ -72,7 +73,8 @@ trait JwtService[F[_]] {
   ): F[String]
   def generateClientCredentialsToken(
       clientId: String,
-      scope: String
+      scope: String,
+      cnfThumbprint: Option[String] = None
   ): F[String]
   def validateAccessToken(
       token: String
@@ -218,7 +220,8 @@ class JwtServiceImpl(config: OidcConfig, keyPairRef: Ref[IO, KeyPair])
       user: User,
       clientId: String,
       scope: String,
-      consentId: Option[String] = None
+      consentId: Option[String] = None,
+      cnfThumbprint: Option[String] = None
   ): IO[String] = {
     for {
       algorithm <- getAlgorithm
@@ -269,7 +272,13 @@ class JwtServiceImpl(config: OidcConfig, keyPairRef: Ref[IO, KeyPair])
       tokenWithConsent = consentId.fold(token)(cid =>
         token.withClaim("consent_id", cid).withClaim("openbanking_intent_id", cid)
       )
-      signedToken = tokenWithConsent.sign(algorithm)
+      // Sender-constrained access token (RFC 8705 §3): binds this token to the mTLS
+      // certificate the client authenticated with, so a stolen bearer token alone
+      // isn't enough to use it — the resource server must see the same certificate.
+      tokenWithCnf = cnfThumbprint.fold(tokenWithConsent)(thumb =>
+        tokenWithConsent.withClaim("cnf", java.util.Collections.singletonMap("x5t#S256", thumb))
+      )
+      signedToken = tokenWithCnf.sign(algorithm)
 
       _ = logger.trace(
         s"Access token generated successfully with azp: $clientId"
@@ -283,7 +292,8 @@ class JwtServiceImpl(config: OidcConfig, keyPairRef: Ref[IO, KeyPair])
 
   def generateClientCredentialsToken(
       clientId: String,
-      scope: String
+      scope: String,
+      cnfThumbprint: Option[String] = None
   ): IO[String] = {
     for {
       algorithm <- getAlgorithm
@@ -312,7 +322,10 @@ class JwtServiceImpl(config: OidcConfig, keyPairRef: Ref[IO, KeyPair])
         .withClaim("client_id", clientId)
         .withClaim("grant_type", "client_credentials")
 
-      signedToken = token.sign(algorithm)
+      tokenWithCnf = cnfThumbprint.fold(token)(thumb =>
+        token.withClaim("cnf", java.util.Collections.singletonMap("x5t#S256", thumb))
+      )
+      signedToken = tokenWithCnf.sign(algorithm)
 
       _ = logger.info(
         s"Client credentials token generated successfully for client: $clientId"

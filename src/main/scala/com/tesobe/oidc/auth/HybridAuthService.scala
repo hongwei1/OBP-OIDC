@@ -666,7 +666,7 @@ class HybridAuthService(
     logger.debug(s"Looking up client via database for client_id: $clientId")
     val query = sql"""
       SELECT client_id, client_secret, client_name, consumer_id, redirect_uris,
-             grant_types, response_types, scopes, token_endpoint_auth_method, created_at, jwks_uri
+             grant_types, response_types, scopes, token_endpoint_auth_method, created_at, jwks_uri, client_certificate
       FROM v_oidc_clients
       WHERE client_id = $clientId
     """.query[DatabaseClient]
@@ -690,7 +690,7 @@ class HybridAuthService(
   def findDatabaseClientById(clientId: String): IO[Option[DatabaseClient]] = {
     val query = sql"""
       SELECT client_id, client_secret, client_name, consumer_id, redirect_uris,
-             grant_types, response_types, scopes, token_endpoint_auth_method, created_at, jwks_uri
+             grant_types, response_types, scopes, token_endpoint_auth_method, created_at, jwks_uri, client_certificate
       FROM v_oidc_clients
       WHERE client_id = $clientId
     """.query[DatabaseClient]
@@ -865,7 +865,7 @@ class HybridAuthService(
     println(s"   Looking in v_oidc_clients view with column 'client_name'")
     val query = sql"""
       SELECT client_id, client_secret, client_name, consumer_id, redirect_uris,
-             grant_types, response_types, scopes, token_endpoint_auth_method, created_at, jwks_uri
+             grant_types, response_types, scopes, token_endpoint_auth_method, created_at, jwks_uri, client_certificate
       FROM v_oidc_clients
       WHERE client_name = $clientName
       LIMIT 1
@@ -931,7 +931,7 @@ class HybridAuthService(
     )
     val query = sql"""
       SELECT client_id, client_secret, client_name, consumer_id, redirect_uris,
-             grant_types, response_types, scopes, token_endpoint_auth_method, created_at, jwks_uri
+             grant_types, response_types, scopes, token_endpoint_auth_method, created_at, jwks_uri, client_certificate
       FROM v_oidc_clients
       WHERE client_name = $clientName
       ORDER BY created_at ASC
@@ -1152,7 +1152,7 @@ class HybridAuthService(
 
     val query = sql"""
       SELECT client_id, client_secret, client_name, consumer_id, redirect_uris,
-             grant_types, response_types, scopes, token_endpoint_auth_method, created_at, jwks_uri
+             grant_types, response_types, scopes, token_endpoint_auth_method, created_at, jwks_uri, client_certificate
       FROM v_oidc_clients
       ORDER BY client_name ASC
     """.query[DatabaseClient]
@@ -1460,7 +1460,8 @@ case class DatabaseClient(
     scopes: Option[String], // Simple string from database
     token_endpoint_auth_method: Option[String],
     created_at: Option[String],
-    jwks_uri: Option[String] = None
+    jwks_uri: Option[String] = None,
+    client_certificate: Option[String] = None
 ) {
   def toOidcClient: OidcClient = OidcClient(
     client_id = client_id,
@@ -1473,7 +1474,8 @@ case class DatabaseClient(
     scopes = parseSimpleString(scopes.orNull),
     token_endpoint_auth_method = token_endpoint_auth_method.getOrElse(""),
     created_at = created_at,
-    jwks_uri = jwks_uri.filter(_.trim.nonEmpty)
+    jwks_uri = jwks_uri.filter(_.trim.nonEmpty),
+    client_certificate = client_certificate.filter(_.trim.nonEmpty)
   )
 
   private def parseSimpleString(str: String): List[String] = {
@@ -1946,7 +1948,8 @@ object DatabaseUserInstances {
           Option[String], // scopes
           Option[String], // token_endpoint_auth_method
           Option[String], // created_at
-          Option[String] // jwks_uri
+          Option[String], // jwks_uri
+          Option[String] // client_certificate
       )
     ]
       .map {
@@ -1961,7 +1964,8 @@ object DatabaseUserInstances {
               scopes,
               token_endpoint_auth_method,
               created_at,
-              jwks_uri
+              jwks_uri,
+              client_certificate
             ) =>
           DatabaseClient(
             client_id = client_id,
@@ -1974,7 +1978,8 @@ object DatabaseUserInstances {
             scopes = scopes,
             token_endpoint_auth_method = token_endpoint_auth_method,
             created_at = created_at,
-            jwks_uri = jwks_uri
+            jwks_uri = jwks_uri,
+            client_certificate = client_certificate
           )
       }
 }

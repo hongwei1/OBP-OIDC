@@ -46,7 +46,9 @@ case class OidcConfiguration(
     require_pushed_authorization_requests: Boolean = false,
     // private_key_jwt (RFC 7523): algorithms this server accepts on a client_assertion signature.
     token_endpoint_auth_signing_alg_values_supported: List[String] =
-      List("RS256", "RS384", "RS512", "ES256", "ES384", "ES512")
+      List("RS256", "RS384", "RS512", "ES256", "ES384", "ES512"),
+    // mTLS / tls_client_auth (RFC 8705): whether access tokens are certificate-bound (cnf claim).
+    tls_client_certificate_bound_access_tokens: Boolean = false
 )
 
 object OidcConfiguration {
@@ -138,7 +140,10 @@ case class OidcClient(
     created_at: Option[String] = None,
     // FAPI 1.0 Advanced: URL where this client publishes its JWKS, used to verify
     // signed request objects and private_key_jwt client assertions.
-    jwks_uri: Option[String] = None
+    jwks_uri: Option[String] = None,
+    // FAPI 1.0 Advanced (tls_client_auth / RFC 8705): the client's registered mTLS
+    // certificate (PEM), matched against what the client presents at token request time.
+    client_certificate: Option[String] = None
 )
 
 object OidcClient {

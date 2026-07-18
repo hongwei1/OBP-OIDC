@@ -107,7 +107,15 @@ case class OidcConfig(
     obpApiConsumerKey: Option[String] = None,
     obpApiRetryMaxAttempts: Int = 60,
     obpApiRetryDelaySeconds: Int = 30,
-    dbVendor: DbVendor = DbVendor.PostgreSQL
+    dbVendor: DbVendor = DbVendor.PostgreSQL,
+    // FAPI 1.0 Advanced tls_client_auth (RFC 8705): OBP-OIDC never terminates TLS
+    // itself, so this trusts a client certificate forwarded by a reverse proxy in
+    // mtlsClientCertHeader. Off by default — only enable once the proxy is
+    // configured to always overwrite this header (never pass through a
+    // client-supplied value) and to only set it after a real TLS handshake
+    // presented and validated a client certificate.
+    mtlsEnabled: Boolean = false,
+    mtlsClientCertHeader: String = "X-SSL-Client-Cert"
 ) {
 
   /** Derived method settings from useVerifyEndpoints */
@@ -217,7 +225,9 @@ object Config {
       obpApiConsumerKey = sys.env.get("OBP_API_CONSUMER_KEY"),
       obpApiRetryMaxAttempts = sys.env.getOrElse("OBP_API_RETRY_MAX_ATTEMPTS", "60").toInt,
       obpApiRetryDelaySeconds = sys.env.getOrElse("OBP_API_RETRY_DELAY_SECONDS", "30").toInt,
-      dbVendor = dbVendor
+      dbVendor = dbVendor,
+      mtlsEnabled = sys.env.getOrElse("OIDC_MTLS_ENABLED", "false").toBoolean,
+      mtlsClientCertHeader = sys.env.getOrElse("OIDC_MTLS_CLIENT_CERT_HEADER", "X-SSL-Client-Cert")
     )
   }
 }

@@ -46,13 +46,14 @@ class DiscoveryEndpoint(config: OidcConfig) {
       jwks_uri = s"${config.issuer}/jwks",
       revocation_endpoint = s"${config.issuer}/revoke",
       pushed_authorization_request_endpoint = Some(s"${config.issuer}/par"),
+      tls_client_certificate_bound_access_tokens = config.mtlsEnabled,
       registration_endpoint = if (config.enableDynamicClientRegistration) Some(s"${config.issuer}/connect/register") else None,
       response_types_supported = List("code", "code id_token"),
       subject_types_supported = List("public"),
       id_token_signing_alg_values_supported = List("RS256"),
       scopes_supported = List("openid", "profile", "email"),
       token_endpoint_auth_methods_supported =
-        List("client_secret_post", "client_secret_basic", "none", "private_key_jwt"),
+        List("client_secret_post", "client_secret_basic", "none", "private_key_jwt", "tls_client_auth"),
       claims_supported = List("sub", "name", "email", "email_verified", "consent_id", "openbanking_intent_id"),
       grant_types_supported =
         List("authorization_code", "refresh_token", "client_credentials"),
@@ -72,13 +73,14 @@ class DiscoveryEndpoint(config: OidcConfig) {
       jwks_uri = s"${config.issuer}/jwks",
       revocation_endpoint = s"${config.issuer}/revoke",
       pushed_authorization_request_endpoint = Some(s"${config.issuer}/par"),
+      tls_client_certificate_bound_access_tokens = config.mtlsEnabled,
       registration_endpoint = if (config.enableDynamicClientRegistration) Some(s"${config.issuer}/connect/register") else None,
       response_types_supported = List("code", "code id_token"),
       subject_types_supported = List("public"),
       id_token_signing_alg_values_supported = List("RS256"),
       scopes_supported = List("openid", "profile", "email"),
       token_endpoint_auth_methods_supported =
-        List("client_secret_post", "client_secret_basic", "none", "private_key_jwt"),
+        List("client_secret_post", "client_secret_basic", "none", "private_key_jwt", "tls_client_auth"),
       claims_supported = List("sub", "name", "email", "email_verified", "consent_id", "openbanking_intent_id"),
       grant_types_supported =
         List("authorization_code", "refresh_token", "client_credentials"),
