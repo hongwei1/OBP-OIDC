@@ -143,7 +143,9 @@ class RegistrationEndpoint(
           response_types = responseTypes,
           scopes = scopes,
           token_endpoint_auth_method = authMethod,
-          created_at = Some(java.time.Instant.now().toString)
+          created_at = Some(java.time.Instant.now().toString),
+          jwks_uri = validatedRequest.jwks_uri,
+          client_certificate = validatedRequest.client_certificate
         )
 
         // Persist the client
@@ -170,7 +172,9 @@ class RegistrationEndpoint(
               token_endpoint_auth_method = authMethod,
               logo_uri = validatedRequest.logo_uri,
               client_uri = validatedRequest.client_uri,
-              contacts = validatedRequest.contacts
+              contacts = validatedRequest.contacts,
+              jwks_uri = createdClient.jwks_uri,
+              client_certificate = createdClient.client_certificate
             )
 
             Created(response.asJson).map(addNoCacheHeaders)
@@ -252,6 +256,37 @@ class RegistrationEndpoint(
           ClientRegistrationError(
             ClientRegistrationError.INVALID_CLIENT_METADATA,
             Some(s"Unsupported token_endpoint_auth_method: $authMethod. Supported: ${ClientRegistrationRequest.SUPPORTED_AUTH_METHODS.mkString(", ")}")
+          )
+        )
+      }
+
+      // private_key_jwt / tls_client_auth need something to verify future requests
+      // against — without it the client could never actually authenticate this way.
+      if (authMethod == "private_key_jwt" && request.jwks_uri.isEmpty) {
+        return Left(
+          ClientRegistrationError(
+            ClientRegistrationError.INVALID_CLIENT_METADATA,
+            Some("jwks_uri is required when token_endpoint_auth_method is private_key_jwt")
+          )
+        )
+      }
+      if (authMethod == "tls_client_auth" && request.client_certificate.isEmpty) {
+        return Left(
+          ClientRegistrationError(
+            ClientRegistrationError.INVALID_CLIENT_METADATA,
+            Some("client_certificate is required when token_endpoint_auth_method is tls_client_auth")
+          )
+        )
+      }
+    }
+
+    // Validate jwks_uri if provided (must be a valid HTTPS URL, per FAPI's TLS requirement)
+    request.jwks_uri.foreach { jwksUri =>
+      if (!isValidHttpUrl(jwksUri)) {
+        return Left(
+          ClientRegistrationError(
+            ClientRegistrationError.INVALID_CLIENT_METADATA,
+            Some(s"jwks_uri must be a valid HTTP/HTTPS URL: $jwksUri")
           )
         )
       }

@@ -357,7 +357,14 @@ case class ClientRegistrationRequest(
     token_endpoint_auth_method: Option[String] = None,
     logo_uri: Option[String] = None,
     client_uri: Option[String] = None,
-    contacts: Option[List[String]] = None
+    contacts: Option[List[String]] = None,
+    // FAPI 1.0 Advanced: jwks_uri is the RFC 7591-standard field, used to verify
+    // signed request objects and private_key_jwt client assertions.
+    jwks_uri: Option[String] = None,
+    // Not an RFC 7591-standard field (no field standardizes an inline mTLS cert at
+    // registration time); a pragmatic extension so tls_client_auth clients can
+    // register their certificate the same way private_key_jwt clients register jwks_uri.
+    client_certificate: Option[String] = None
 )
 
 object ClientRegistrationRequest {
@@ -376,7 +383,9 @@ object ClientRegistrationRequest {
   val SUPPORTED_AUTH_METHODS: Set[String] = Set(
     "client_secret_post",
     "client_secret_basic",
-    "none"
+    "none",
+    "private_key_jwt",
+    "tls_client_auth"
   )
 
   val DEFAULT_GRANT_TYPES: List[String] = List("authorization_code")
@@ -399,7 +408,9 @@ case class ClientRegistrationResponse(
     token_endpoint_auth_method: String,
     logo_uri: Option[String] = None,
     client_uri: Option[String] = None,
-    contacts: Option[List[String]] = None
+    contacts: Option[List[String]] = None,
+    jwks_uri: Option[String] = None,
+    client_certificate: Option[String] = None
 )
 
 object ClientRegistrationResponse {

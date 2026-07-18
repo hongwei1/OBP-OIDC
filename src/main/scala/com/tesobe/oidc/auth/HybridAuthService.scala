@@ -1006,14 +1006,15 @@ class HybridAuthService(
           INSERT INTO v_oidc_admin_clients (
             name, apptype, description, developeremail, sub,
             secret, azp, aud, iss, redirecturl, company, key_c, consumerid, isactive,
-            createdat, updatedat, jwksuri
+            createdat, updatedat, jwksuri, clientcertificate
           ) VALUES (
             ${adminClient.name}, ${adminClient.apptype}, ${adminClient.description},
             ${adminClient.developeremail}, ${adminClient.sub},
             ${adminClient.secret}, ${adminClient.azp}, ${adminClient.aud},
             ${adminClient.iss}, ${adminClient.redirecturl}, ${adminClient.company},
             ${adminClient.key_c}, ${adminClient.consumerid}, ${adminClient.isactive},
-            ${adminClient.createdat}, ${adminClient.updatedat}, ${adminClient.jwksuri}
+            ${adminClient.createdat}, ${adminClient.updatedat}, ${adminClient.jwksuri},
+            ${adminClient.clientcertificate}
           )
         """.update
 
@@ -1563,7 +1564,7 @@ object AdminDatabaseClient {
     redirecturl = Some(client.redirect_uris.mkString(",")),
     logourl = None,
     userauthenticationurl = None,
-    clientcertificate = None,
+    clientcertificate = client.client_certificate,
     company = Some("TESOBE"),
     key_c = Some(
       client.client_id
